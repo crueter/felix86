@@ -5,6 +5,7 @@
 #include "felix86/common/log.hpp"
 #include "felix86/common/state.hpp"
 #include "felix86/common/types.hpp"
+#include "felix86/hle/ptrace.hpp"
 
 #ifndef SA_NODEFER
 #define SA_NODEFER 0x40000000
@@ -93,6 +94,7 @@ struct Signals {
             sigdelset(&mask, SIGILL);
             sigdelset(&mask, SIGSEGV);
             sigdelset(&mask, SIGABRT);
+            sigdelset(&mask, FELIX86_PTRACE_SIGNAL);
             initialized = true;
         }
         return &mask;

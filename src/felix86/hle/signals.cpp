@@ -1117,6 +1117,10 @@ bool handle_wild_sigabrt(ThreadState* current_state, siginfo_t* info, ucontext_t
     }
 }
 
+bool handle_ptrace_event(ThreadState* current_state, siginfo_t* info, ucontext_t* context, u64 pc) {
+    UNREACHABLE();
+}
+
 bool handle_synchronous(ThreadState* current_state, siginfo_t* info, ucontext_t* context, u64 pc) {
     // We can't cause a SIGSEGV SI_KERNEL from RISC-V, so fix up info->si_code to match x86 behavior
     if (!is_in_jit_code(current_state, (u8*)pc)) {
@@ -1181,13 +1185,14 @@ bool handle_synchronous(ThreadState* current_state, siginfo_t* info, ucontext_t*
     return true;
 }
 
-constexpr std::array<RegisteredHostSignal, 6> host_signals = {{
+constexpr std::array<RegisteredHostSignal, 7> host_signals = {{
     {SIGSEGV, SEGV_ACCERR, handle_safepoint},
     {SIGSEGV, SEGV_ACCERR, handle_smc},
     {SIGSEGV, SEGV_MAPERR, handle_synchronous},
     {SIGILL, 0, handle_breakpoint},
     {SIGSEGV, 0, handle_wild_sigsegv}, // order matters, relevant sigsegvs are handled before this handler
     {SIGABRT, 0, handle_wild_sigabrt},
+    {FELIX86_PTRACE_SIGNAL, 0, handle_ptrace_event},
 }};
 
 bool dispatch_host(int sig, siginfo_t* info, void* ctx) {

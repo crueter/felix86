@@ -1228,10 +1228,10 @@ bool handle_synchronous(ThreadState* current_state, siginfo_t* info, ucontext_t*
 }
 
 constexpr std::array<RegisteredHostSignal, 7> host_signals = {{
+    {SIGSEGV, SEGV_ACCERR, handle_unaligned_tso_atomic},
     {SIGSEGV, SEGV_ACCERR, handle_safepoint},
     {SIGSEGV, SEGV_ACCERR, handle_smc},
     {SIGSEGV, SEGV_MAPERR, handle_synchronous},
-    {SIGBUS, BUS_ADRALN, handle_unaligned_tso_atomic},
     {SIGILL, 0, handle_breakpoint},
     {SIGSEGV, 0, handle_wild_sigsegv}, // order matters, relevant sigsegvs are handled before this handler
     {SIGABRT, 0, handle_wild_sigabrt},

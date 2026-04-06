@@ -66,3 +66,4 @@ X(Performance, bool, auto_compress, false, FELIX86_AUTO_COMPRESS, "Automatically
 X(Performance, bool, scan_ahead_multi, true, FELIX86_SCAN_AHEAD_MULTI, "Scan ahead to multiple blocks when possible, avoiding even more flag calculations", false)
 X(Performance, bool, no_address_overflow, true, FELIX86_NO_ADDRESS_OVERFLOW, "Assume addresses won't overflow in 32-bit apps, which allows for some optimizations", false)
 X(Performance, bool, group_loadstore, true, FELIX86_GROUP_LOADSTORE, "Load/store SIMD state in groups of eight, may improve performance", false)
+X(Performance, bool, aligned_tso_optimizations, false, FELIX86_ALIGNED_TSO_OPTIMIZATIONS, "Use atomics for TSO emulation, replace with fenced load/stores if unaligned, may improve performance", false)

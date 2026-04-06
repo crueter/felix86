@@ -1092,8 +1092,78 @@ bool handle_wild_sigabrt(ThreadState* current_state, siginfo_t* info, ucontext_t
     }
 }
 
+bool handle_unaligned_tso_atomic(ThreadState* current_state, siginfo_t* info, ucontext_t* context, u64 pc) {
+    if (!is_in_jit_code(current_state, (u8*)pc)) {
+        return false;
+    }
+
+    if (!g_config.aligned_tso_optimizations) {
+        return false;
+    }
+
+    u32 current_instruction, previous_instruction;
+    current_instruction = *(u32*)pc;
+    previous_instruction = *(u32*)(pc - 4);
+
+    u32 mask = (0b11111 << 27) | 0b1111111;
+    u32 expected = (0b00001 << 27) | 0b0101111;
+    if ((current_instruction & mask) != expected) {
+        WARN("BUS_ADRALN caused but not by AMOSWAP");
+        return false;
+    }
+
+    u32 size = (current_instruction >> 12) & 0b111;
+    ASSERT(size == 0b001 || size == 0b010 || size == 0b011);
+
+    u32 rd = (current_instruction >> 7) & 0b11111;
+    if (rd != 0) {
+        WARN("AMOSWAP caused BUS_ADRALN but rd isn't x0");
+        return false;
+    }
+
+    u32 nop;
+    {
+        Assembler tas((u8*)&nop, sizeof(u32));
+        tas.NOP();
+    }
+
+    if (previous_instruction != nop) {
+        WARN("AMOSWAP caused BUS_ADRALN but previous instruction isn't NOP");
+        return false;
+    }
+
+    // It's an unaligned AMOSWAP used for TSO emulation, replace it with store instruction + fence
+    Assembler cas((u8*)pc, sizeof(u32));
+    u32 rs = (current_instruction >> 20) & 0b11111;
+    u32 address = (current_instruction >> 15) & 0b11111;
+    switch (size) {
+    case 0b001: {
+        cas.SH(biscuit::GPR(rs), 0, biscuit::GPR(address));
+        break;
+    }
+    case 0b010: {
+        cas.SW(biscuit::GPR(rs), 0, biscuit::GPR(address));
+        break;
+    }
+    case 0b011: {
+        cas.SD(biscuit::GPR(rs), 0, biscuit::GPR(address));
+        break;
+    }
+    default: {
+        UNREACHABLE();
+    }
+    }
+
+    Assembler pas((u8*)(pc - 4), sizeof(u32));
+    pas.FENCE(FenceOrder::RW, FenceOrder::W);
+    flush_icache_global(pc - 4, pc);
+
+    // Return to the fence instruction
+    context->uc_mcontext.gregs[REG_PC] = pc - 4;
+    return true;
+}
+
 bool handle_synchronous(ThreadState* current_state, siginfo_t* info, ucontext_t* context, u64 pc) {
-    // We can't cause a SIGSEGV SI_KERNEL from RISC-V, so fix up info->si_code to match x86 behavior
     if (!is_in_jit_code(current_state, (u8*)pc)) {
         return false;
     }
@@ -1132,6 +1202,7 @@ bool handle_synchronous(ThreadState* current_state, siginfo_t* info, ucontext_t*
     u64 actual_rip = get_actual_rip(*current_block, pc);
 
     int sig;
+    // We can't cause a SIGSEGV SI_KERNEL from RISC-V, so fix up info->si_code to match x86 behavior
     if (next_instruction == expected_hlt) {
         sig = SIGSEGV;
         info->si_code = SI_KERNEL;
@@ -1156,10 +1227,11 @@ bool handle_synchronous(ThreadState* current_state, siginfo_t* info, ucontext_t*
     return true;
 }
 
-constexpr std::array<RegisteredHostSignal, 6> host_signals = {{
+constexpr std::array<RegisteredHostSignal, 7> host_signals = {{
     {SIGSEGV, SEGV_ACCERR, handle_safepoint},
     {SIGSEGV, SEGV_ACCERR, handle_smc},
     {SIGSEGV, SEGV_MAPERR, handle_synchronous},
+    {SIGBUS, BUS_ADRALN, handle_unaligned_tso_atomic},
     {SIGILL, 0, handle_breakpoint},
     {SIGSEGV, 0, handle_wild_sigsegv}, // order matters, relevant sigsegvs are handled before this handler
     {SIGABRT, 0, handle_wild_sigabrt},

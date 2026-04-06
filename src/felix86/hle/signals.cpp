@@ -1159,7 +1159,7 @@ bool handle_unaligned_tso_atomic(ThreadState* current_state, siginfo_t* info, uc
     flush_icache_global(pc - 4, pc);
 
     // Return to the fence instruction
-    context->uc_mcontext.gregs[REG_PC] = pc - 4;
+    set_pc(context, pc - 4);
     return true;
 }
 

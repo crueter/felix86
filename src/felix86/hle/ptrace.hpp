@@ -1,17 +1,11 @@
 #include <csignal>
+#include <utility>
+#include <mqueue.h>
 #include <sys/ptrace.h>
 #include <sys/types.h>
 #include "felix86/common/types.hpp"
 
 #define FELIX86_PTRACE_SIGNAL 53
-
-// sigqueue is used to send a 64-bit number to the parent (in the case of traceme) or tracee (in the case of attach and seize)
-// to inform them that they are now tracing/being traced (that is, TRACEME, ATTACH and SEIZE only are sent through signals)
-// Signals are used for this because it needs to happen asynchronously and at any time. For example, the parent or tracee may be blocked
-// in kernel-space, but they need to be informed immediately regardless
-// Other ptrace commands, such as PTRACE_PEEKDATA, only happen when the tracee is in a stop state, so we can use a different mechanism
-// to transfer the information, message queues
-#define FELIX86_PTRACE_GET_EVENT(x) (x & 0xFFFF)
 
 // Copied from x86 ptrace.h file as there's differences with RISC-V
 enum {
@@ -60,10 +54,18 @@ enum {
     felix86_PTRACE_GET_SYSCALL_USER_DISPATCH_CONFIG = 0x4211
 };
 
+struct ThreadState;
+
 struct Ptrace {
     static u64 request(enum __ptrace_request op, pid_t pid, void* addr, void* data);
 
-    static void handle_event(siginfo_t* info);
+    static bool handle_event(siginfo_t* info);
+
+    static std::pair<mqd_t, mqd_t> create_ptrace_mqs(pid_t tracer_pid, pid_t tracee_pid);
+
+    static void unlink_ptrace_mqs();
+
+    static void enter_stop(ThreadState* state);
 
     static void traceme();
 };

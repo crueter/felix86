@@ -6,6 +6,20 @@
 pid_t g_tracer_pid = -1;
 bool g_is_tracer = false;
 
+enum class PtraceCommandType : u8 {
+    EnterSignalDeliveryStop = 1,
+    EnterSyscallEnterStop = 2,
+};
+
+union PtraceCommandPayload {
+    u8 reserved[64];
+};
+
+struct PtraceCommand {
+    PtraceCommandType type;
+    PtraceCommandPayload payload;
+};
+
 void make_mq_name(char* buffer, pid_t from, pid_t to) {
     // Use snprintf so it's async-signal-safe
     // snprintf won't use malloc here
@@ -19,7 +33,7 @@ std::pair<mqd_t, mqd_t> Ptrace::create_ptrace_mqs(pid_t tracer_pid, pid_t tracee
     make_mq_name(buffer2, tracee_pid, tracer_pid);
     struct mq_attr attr = {};
     attr.mq_maxmsg = 1;
-    attr.mq_msgsize = 4096;
+    attr.mq_msgsize = sizeof(PtraceCommand); // only one command at a time
     mqd_t mq1 = mq_open(buffer1, O_CREAT, 0666, &attr);
     mqd_t mq2 = mq_open(buffer2, O_CREAT, 0666, &attr);
     ASSERT(mq1 >= 0);
@@ -90,7 +104,18 @@ bool Ptrace::handle_event(siginfo_t* info) {
     }
 }
 
-void Ptrace::enter_stop(ThreadState* state) {
+PtraceCommandType stop_type_to_command_type(StopType type) {
+    switch (type) {
+    case StopType::SignalDeliveryStop: {
+        return PtraceCommandType::EnterSignalDeliveryStop;
+    }
+    case StopType::SyscallEnterStop: {
+        return PtraceCommandType::EnterSyscallEnterStop;
+    }
+    }
+}
+
+void Ptrace::enter_stop(ThreadState* state, StopType stop_type) {
     // This function is called from inside a syscall (for syscall-enter-stop),
     // inside a signal (for signal-delivery-stop), or other similar stops, herein referred to as "stops"
     // The signal-delivery-stop happens during a safepoint. At that time, we are inside a host
@@ -101,6 +126,11 @@ void Ptrace::enter_stop(ThreadState* state) {
         // Is not being traced, just return
         return;
     }
+
+    // Block signals for the stop to make things less complicated, and mq_send/mq_receive won't be interrupted
+    sigset_t old_mask, full;
+    sigfillset(&full);
+    ASSERT(sigprocmask(SIG_BLOCK, &full, &old_mask) == 0);
 
     auto mqs = get_ptrace_mqs(g_tracer_pid, gettid());
     mqd_t write_mq = mqs.second;
@@ -116,4 +146,28 @@ void Ptrace::enter_stop(ThreadState* state) {
     result = mq_getattr(read_mq, &read_attr);
     ASSERT(result == 0);
     ASSERT(read_attr.mq_curmsgs == 0);
+
+    // Notify tracer that we entered a stop
+    PtraceCommand command;
+    command.type = stop_type_to_command_type(stop_type);
+    result = mq_send(write_mq, (const char*)&command, sizeof(command), 0) == 0;
+    if (result != 0) {
+        ASSERT_MSG(false, "Failed to write to ptrace message queue with error: %d", -errno);
+    }
+
+    // Now wait for ptrace commands
+    while (true) {
+        PtraceCommand incoming_command;
+        u32 prio;
+        result = mq_receive(read_mq, (char*)&incoming_command, sizeof(incoming_command), &prio);
+        if (result != 0) {
+            ASSERT_MSG(false, "Failed to read from ptrace message queue with error: %d", -errno);
+        }
+        bool should_exit = Ptrace::handle_command(&incoming_command);
+        if (should_exit) {
+            break;
+        }
+    }
+
+    ASSERT(sigprocmask(SIG_SETMASK, &old_mask, nullptr) == 0);
 }

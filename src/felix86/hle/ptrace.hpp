@@ -56,6 +56,11 @@ enum {
 
 struct ThreadState;
 
+enum class StopType {
+    SignalDeliveryStop,
+    SyscallEnterStop,
+};
+
 struct Ptrace {
     static u64 request(enum __ptrace_request op, pid_t pid, void* addr, void* data);
 
@@ -65,7 +70,7 @@ struct Ptrace {
 
     static void unlink_ptrace_mqs();
 
-    static void enter_stop(ThreadState* state);
+    static void enter_stop(ThreadState* state, StopType stop_type);
 
     static void traceme();
 };

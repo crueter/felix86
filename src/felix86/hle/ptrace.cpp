@@ -146,6 +146,16 @@ void Ptrace::enter_stop(ThreadState* state, StopType stop_type) {
     result = mq_getattr(read_mq, &read_attr);
     ASSERT(result == 0);
     ASSERT(read_attr.mq_curmsgs == 0);
+    ASSERT(read_attr.mq_maxmsg == 0);
+
+    // Enable writing for the tracer, which it uses to check if we are stopped or not
+    mq_attr new_attr;
+    new_attr.mq_flags = 0;
+    new_attr.mq_maxmsg = 1;
+    new_attr.mq_curmsgs = 0;
+    new_attr.mq_msgsize = read_attr.mq_msgsize;
+    result = mq_setattr(read_mq, &new_attr, nullptr);
+    ASSERT(result == 0);
 
     // Notify tracer that we entered a stop
     PtraceCommand command;
@@ -163,11 +173,19 @@ void Ptrace::enter_stop(ThreadState* state, StopType stop_type) {
         if (result != 0) {
             ASSERT_MSG(false, "Failed to read from ptrace message queue with error: %d", -errno);
         }
+
         bool should_exit = Ptrace::handle_command(&incoming_command);
         if (should_exit) {
             break;
         }
     }
 
+    // The tracer, upon sending us a continue command, will set the mq_maxmsg back to 0
+    // This is done so that if a program decides to continue and then send a command that would
+    // require the tracer to be stopped, it will correctly see mq_maxmsg is 0 and return ESRCH, thus
+    // avoiding a race
+    result = mq_getattr(read_mq, &new_attr);
+    ASSERT(result == 0);
+    ASSERT(new_attr.mq_maxmsg == 0);
     ASSERT(sigprocmask(SIG_SETMASK, &old_mask, nullptr) == 0);
 }
